@@ -1,32 +1,17 @@
-# Bolt Processing API
+# Gopoddy-IA-1 API
 
-API de traitement audio pour GOPODDY IA 🚀
+API Node.js déployée sur Render pour traiter les fichiers audio avec Supabase et FFmpeg.
 
-## 🚀 Installation
-
+## 🚀 Installation locale
 ```bash
-git clone <repo-url>
-cd bolt-processing-api
 npm install
-```
-
-## ▶️ Lancer en local
-
-```bash
 npm start
 ```
 
-## 🌍 Routes disponibles
+## ⚙️ Variables d'environnement
+- `SUPABASE_URL` : URL de ton projet Supabase
+- `SUPABASE_SERVICE_ROLE_KEY` : Service Role Key de Supabase (⚠️ ne pas utiliser la anon key)
 
-- `GET /api/status` → Vérifie que l'API fonctionne
+## 📡 Endpoints
+- `GET /test-env` → Vérifie que la clé est bien chargée
 - `POST /api/process-audio` → Lance un traitement audio
-
-Exemple POST :
-```json
-{
-  "inputUrl": "https://supabase.storage/audio/original.mp3",
-  "projectId": "123",
-  "userId": "456",
-  "options": { "normalize": true }
-}
-```

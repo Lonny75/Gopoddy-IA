@@ -1,7 +1,6 @@
-// index.js
 import express from "express";
 import dotenv from "dotenv";
-import processAndUploadAudio from './utils/processAudio.js';
+import { processAudio } from "./utils/processAudio.js"; // 👈 importer la bonne fonction
 import pkg from "@supabase/supabase-js";
 
 dotenv.config({ path: "_env" }); // bien préciser _env
@@ -31,36 +30,22 @@ app.post("/process-audio", async (req, res) => {
     await supabase.from("projects").update({ status: "processing" }).eq("id", projectId);
 
     // Traitement audio
-    const result = await processAudio(inputUrl, options);
+    const result = await processAudio({ inputUrl, projectId, userId, options });
 
-    // Upload dans Supabase Storage
-    const filePath = `processed/${projectId}-${Date.now()}.mp3`;
-    const { error: uploadError } = await supabase.storage
-      .from("audio-files")
-      .upload(filePath, result.buffer, { contentType: "audio/mpeg", upsert: true });
-
-    if (uploadError) throw uploadError;
-
-    // URL publique du fichier traité
-    const { data } = supabase.storage.from("audio-files").getPublicUrl(filePath);
-    const outputUrl = data.publicUrl;
+    if (!result.success) throw new Error(result.error);
 
     // Mise à jour du projet -> statut "completed"
     await supabase.from("projects").update({
       status: "completed",
-      processed_file_path: filePath,
-      processed_url: outputUrl,
-      duration: result.duration,
-      size: result.size
+      processed_file_path: result.processedPath,
+      processed_url: result.processedUrl
     }).eq("id", projectId);
 
-    console.log("✅ Processing completed:", outputUrl);
+    console.log("✅ Processing completed:", result.processedUrl);
 
     return res.json({
       success: true,
-      outputUrl,
-      duration: result.duration,
-      size: result.size
+      outputUrl: result.processedUrl,
     });
 
   } catch (err) {

@@ -1,7 +1,7 @@
 // index.js
 import express from "express";
 import dotenv from "dotenv";
-import processAudio from "./processAudio.js";
+import processAndUploadAudio from './utils/processAudio.js';
 import pkg from "@supabase/supabase-js";
 
 dotenv.config({ path: "_env" }); // bien préciser _env

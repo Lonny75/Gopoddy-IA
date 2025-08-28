@@ -1,11 +1,9 @@
-// server/utils/processAudio.js
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
-import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
 
-// ⚡ Charger les variables depuis _env
+// Charger _env
 const _envPath = path.resolve(process.cwd(), "_env");
 if (fs.existsSync(_envPath)) {
   const envContent = fs.readFileSync(_envPath, "utf-8");
@@ -17,21 +15,17 @@ if (fs.existsSync(_envPath)) {
   console.warn("⚠️ Fichier _env introuvable");
 }
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("❌ Variables d'environnement Supabase manquantes !");
-}
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 export async function processAudio({ inputUrl, projectId, userId, options }) {
   console.log("🔹 Début du processAudio");
   console.log("Input URL:", inputUrl);
 
   try {
-    // 1️⃣ Télécharger le fichier depuis Supabase
+    // 1️⃣ Télécharger le fichier depuis Supabase (fetch natif Node.js)
     const response = await fetch(inputUrl);
     if (!response.ok) throw new Error(`Erreur téléchargement: ${response.statusText}`);
 
@@ -49,79 +43,47 @@ export async function processAudio({ inputUrl, projectId, userId, options }) {
 
     // 3️⃣ Construire la commande FFmpeg
     let ffmpegCmd = `ffmpeg -y -i "${tempFileName}"`;
-    if (options.normalize) {
-      ffmpegCmd += " -filter:a loudnorm";
-    }
+    if (options?.normalize) ffmpegCmd += " -filter:a loudnorm";
     ffmpegCmd += ` "${outputFileName}"`;
 
     console.log("🔹 Commande FFmpeg:", ffmpegCmd);
 
-    // 4️⃣ Exécuter FFmpeg avec logs
+    // 4️⃣ Exécuter FFmpeg
     await new Promise((resolve, reject) => {
-      const ff = exec(ffmpegCmd, (error, stdout, stderr) => {
+      exec(ffmpegCmd, (error, stdout, stderr) => {
         console.log("🔹 FFmpeg stdout:", stdout);
         console.log("🔹 FFmpeg stderr:", stderr);
 
-        if (error) {
-          console.error("❌ Erreur FFmpeg:", error);
-          reject(error);
-        } else {
-          console.log("✅ FFmpeg terminé");
-          resolve();
-        }
+        if (error) return reject(error);
+        resolve();
       });
     });
 
-    // 5️⃣ Déterminer le dossier d’upload selon projectId
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    const folder = uuidRegex.test(projectId) ? projectId : "processed";
-    const processedPath = `${folder}/output_${Date.now()}.mp3`;
-
-    // 6️⃣ Upload sur Supabase
+    // 5️⃣ Upload dans Supabase
+    const processedPath = `${projectId}/output_${Date.now()}.mp3`;
     const fileBuffer = fs.readFileSync(outputFileName);
+
     const { error: uploadError } = await supabase.storage
       .from("audio-files")
       .upload(processedPath, fileBuffer, { upsert: true });
+
     if (uploadError) throw uploadError;
 
     console.log("✅ Fichier traité uploadé:", processedPath);
 
-    // 7️⃣ Récupérer l'URL publique
-    const { publicUrl } = supabase.storage.from("audio-files").getPublicUrl(processedPath);
+    // 6️⃣ Récupérer l'URL publique
+    const { data } = supabase.storage.from("audio-files").getPublicUrl(processedPath);
+    const processedUrl = data.publicUrl;
 
-    // 8️⃣ Mettre à jour la DB
-    const { error: dbError } = await supabase
-      .from("projects")
-      .update({
-        processed_file_path: processedPath,
-        processed_file_url: publicUrl,
-        status: "completed",
-      })
-      .eq("id", projectId);
-
-    if (dbError) throw dbError;
-    console.log("✅ DB mise à jour pour projectId:", projectId);
-
-    // 9️⃣ Nettoyer fichiers temporaires
+    // Nettoyage fichiers
     fs.unlinkSync(tempFileName);
     fs.unlinkSync(outputFileName);
 
     console.log("🔹 ProcessAudio terminé avec succès");
-    return { success: true, processedUrl: publicUrl };
+    return { success: true, processedUrl, processedPath };
 
   } catch (err) {
     console.error("❌ processAudio erreur:", err);
-
-    // Mettre à jour le statut failed si possible
-    try {
-      await supabase
-        .from("projects")
-        .update({ status: "failed" })
-        .eq("id", projectId);
-    } catch (e) {
-      console.error("⚠️ Impossible de mettre à jour le statut failed:", e);
-    }
-
     return { success: false, error: err.message };
   }
 }

@@ -1,89 +1,84 @@
+// utils/processAudio.js
 import fs from "fs";
 import path from "path";
-import { exec } from "child_process";
-import { createClient } from "@supabase/supabase-js";
+import { fileURLToPath } from "url";
+import { spawn } from "child_process";
+import { downloadFile } from "./downloadFile.js";
+import { uploadFile } from "./uploadFile.js";
+import { getAudioDuration } from "./utilsAudio.js";
 
-// Charger _env
-const _envPath = path.resolve(process.cwd(), "_env");
-if (fs.existsSync(_envPath)) {
-  const envContent = fs.readFileSync(_envPath, "utf-8");
-  envContent.split("\n").forEach(line => {
-    const [key, ...vals] = line.split("=");
-    if (key) process.env[key.trim()] = vals.join("=").trim();
-  });
-} else {
-  console.warn("⚠️ Fichier _env introuvable");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/**
+ * Traite un fichier audio avec FFmpeg puis réupload dans Supabase
+ */
+export async function processAudio({ inputPath, preset, projectId }) {
+  try {
+    // 🔹 Dossier temporaire
+    const tmpDir = path.join(__dirname, "../tmp");
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    // 🔹 Fichiers locaux
+    const inputFile = path.join(tmpDir, `input-${Date.now()}.mp3`);
+    const outputFile = path.join(tmpDir, `output-${Date.now()}.mp3`);
+
+    // 1. Télécharger depuis Supabase Storage
+    await downloadFile(inputPath, inputFile);
+
+    // 2. Choisir le preset → juste un exemple simple
+    let ffmpegArgs;
+    switch (preset) {
+      case "nice":
+        ffmpegArgs = ["-i", inputFile, "-af", "loudnorm", outputFile];
+        break;
+      case "bass":
+        ffmpegArgs = ["-i", inputFile, "-af", "bass=g=5", outputFile];
+        break;
+      default:
+        ffmpegArgs = ["-i", inputFile, outputFile];
+    }
+
+    // 3. Lancer FFmpeg
+    await runFfmpeg(ffmpegArgs);
+
+    // 4. Durée du fichier traité
+    const duration = await getAudioDuration(outputFile);
+
+    // 5. Upload dans Supabase
+    const outputPath = `${projectId}/processed-${Date.now()}.mp3`;
+    const outputUrl = await uploadFile(outputFile, outputPath);
+
+    // 6. Nettoyer les fichiers temporaires
+    fs.unlinkSync(inputFile);
+    fs.unlinkSync(outputFile);
+
+    return { outputUrl, duration };
+  } catch (err) {
+    console.error("❌ Erreur processAudio:", err.message);
+    throw err;
+  }
 }
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+/**
+ * Lance FFmpeg en promesse
+ */
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn("ffmpeg", args);
 
-export async function processAudio({ inputUrl, projectId, userId, options }) {
-  console.log("🔹 Début du processAudio");
-  console.log("Input URL:", inputUrl);
-
-  try {
-    // 1️⃣ Télécharger le fichier depuis Supabase (fetch natif Node.js)
-    const response = await fetch(inputUrl);
-    if (!response.ok) throw new Error(`Erreur téléchargement: ${response.statusText}`);
-
-    const tempFileName = path.join("/tmp", `input_${Date.now()}.mp3`);
-    const fileStream = fs.createWriteStream(tempFileName);
-    await new Promise((resolve, reject) => {
-      response.body.pipe(fileStream);
-      response.body.on("error", reject);
-      fileStream.on("finish", resolve);
+    ffmpeg.stderr.on("data", (data) => {
+      console.log("ffmpeg:", data.toString());
     });
-    console.log("✅ Fichier téléchargé localement:", tempFileName);
 
-    // 2️⃣ Préparer le fichier de sortie
-    const outputFileName = path.join("/tmp", `output_${Date.now()}.mp3`);
-
-    // 3️⃣ Construire la commande FFmpeg
-    let ffmpegCmd = `ffmpeg -y -i "${tempFileName}"`;
-    if (options?.normalize) ffmpegCmd += " -filter:a loudnorm";
-    ffmpegCmd += ` "${outputFileName}"`;
-
-    console.log("🔹 Commande FFmpeg:", ffmpegCmd);
-
-    // 4️⃣ Exécuter FFmpeg
-    await new Promise((resolve, reject) => {
-      exec(ffmpegCmd, (error, stdout, stderr) => {
-        console.log("🔹 FFmpeg stdout:", stdout);
-        console.log("🔹 FFmpeg stderr:", stderr);
-
-        if (error) return reject(error);
+    ffmpeg.on("close", (code) => {
+      if (code === 0) {
         resolve();
-      });
+      } else {
+        reject(new Error(`FFmpeg exited with code ${code}`));
+      }
     });
-
-    // 5️⃣ Upload dans Supabase
-    const processedPath = `${projectId}/output_${Date.now()}.mp3`;
-    const fileBuffer = fs.readFileSync(outputFileName);
-
-    const { error: uploadError } = await supabase.storage
-      .from("audio-files")
-      .upload(processedPath, fileBuffer, { upsert: true });
-
-    if (uploadError) throw uploadError;
-
-    console.log("✅ Fichier traité uploadé:", processedPath);
-
-    // 6️⃣ Récupérer l'URL publique
-    const { data } = supabase.storage.from("audio-files").getPublicUrl(processedPath);
-    const processedUrl = data.publicUrl;
-
-    // Nettoyage fichiers
-    fs.unlinkSync(tempFileName);
-    fs.unlinkSync(outputFileName);
-
-    console.log("🔹 ProcessAudio terminé avec succès");
-    return { success: true, processedUrl, processedPath };
-
-  } catch (err) {
-    console.error("❌ processAudio erreur:", err);
-    return { success: false, error: err.message };
-  }
+  });
 }

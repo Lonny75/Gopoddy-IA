@@ -1,84 +1,37 @@
-// utils/processAudio.js
-import fs from "fs";
+// server/utils/processAudio.js
+import { exec } from "child_process";
 import path from "path";
-import { fileURLToPath } from "url";
-import { spawn } from "child_process";
-import { downloadFile } from "./downloadFile.js";
-import { uploadFile } from "./uploadFile.js";
-import { getAudioDuration } from "./utilsAudio.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 /**
- * Traite un fichier audio avec FFmpeg puis réupload dans Supabase
+ * Traite un fichier audio selon un preset
+ * @param {string} inputPath - chemin du fichier source
+ * @param {string} preset - "nice" ou "podcast"
+ * @returns {Promise<string>} chemin du fichier de sortie
  */
-export async function processAudio({ inputPath, preset, projectId }) {
-  try {
-    // 🔹 Dossier temporaire
-    const tmpDir = path.join(__dirname, "../tmp");
-    if (!fs.existsSync(tmpDir)) {
-      fs.mkdirSync(tmpDir, { recursive: true });
-    }
-
-    // 🔹 Fichiers locaux
-    const inputFile = path.join(tmpDir, `input-${Date.now()}.mp3`);
-    const outputFile = path.join(tmpDir, `output-${Date.now()}.mp3`);
-
-    // 1. Télécharger depuis Supabase Storage
-    await downloadFile(inputPath, inputFile);
-
-    // 2. Choisir le preset → juste un exemple simple
-    let ffmpegArgs;
-    switch (preset) {
-      case "nice":
-        ffmpegArgs = ["-i", inputFile, "-af", "loudnorm", outputFile];
-        break;
-      case "bass":
-        ffmpegArgs = ["-i", inputFile, "-af", "bass=g=5", outputFile];
-        break;
-      default:
-        ffmpegArgs = ["-i", inputFile, outputFile];
-    }
-
-    // 3. Lancer FFmpeg
-    await runFfmpeg(ffmpegArgs);
-
-    // 4. Durée du fichier traité
-    const duration = await getAudioDuration(outputFile);
-
-    // 5. Upload dans Supabase
-    const outputPath = `${projectId}/processed-${Date.now()}.mp3`;
-    const outputUrl = await uploadFile(outputFile, outputPath);
-
-    // 6. Nettoyer les fichiers temporaires
-    fs.unlinkSync(inputFile);
-    fs.unlinkSync(outputFile);
-
-    return { outputUrl, duration };
-  } catch (err) {
-    console.error("❌ Erreur processAudio:", err.message);
-    throw err;
-  }
-}
-
-/**
- * Lance FFmpeg en promesse
- */
-function runFfmpeg(args) {
+export function processAudio(inputPath, preset) {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn("ffmpeg", args);
+    const outputPath = path.join(
+      "/tmp",
+      `output-${Date.now()}-${preset}.mp3`
+    );
 
-    ffmpeg.stderr.on("data", (data) => {
-      console.log("ffmpeg:", data.toString());
-    });
+    let ffmpegCmd = "";
 
-    ffmpeg.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`FFmpeg exited with code ${code}`));
+    if (preset === "nice") {
+      // Normalisation + compression
+      ffmpegCmd = `ffmpeg -i "${inputPath}" -af "loudnorm,acompressor" -y "${outputPath}"`;
+    } else if (preset === "podcast") {
+      // Filtrage et réduction de bruit
+      ffmpegCmd = `ffmpeg -i "${inputPath}" -af "highpass=f=200,lowpass=f=3000,afftdn" -y "${outputPath}"`;
+    } else {
+      return reject(new Error(`Preset inconnu: ${preset}`));
+    }
+
+    exec(ffmpegCmd, (err) => {
+      if (err) {
+        return reject(new Error("Erreur lors du traitement audio avec ffmpeg"));
       }
+      resolve(outputPath);
     });
   });
 }

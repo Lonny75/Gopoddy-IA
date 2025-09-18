@@ -2,12 +2,17 @@
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from '@supabase/supabase-js';
 
-// Supabase service key (assure-toi qu'elle est bien définie dans les variables d'environnement)
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Supabase URL ou Service Key manquant');
+}
+
+export const supabase = createClient(supabaseUrl, supabaseKey);
+
 
 // Télécharge un fichier depuis une URL vers /tmp
 async function downloadFile(url, dest) {

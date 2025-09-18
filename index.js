@@ -1,13 +1,21 @@
 // index.js
 import express from "express";
 import cors from "cors";
-import { processAudio } from "./utils/processAudio.js";
+// Attention : on importe processAudio après le check pour voir les variables
+// import { processAudio } from "./utils/processAudio.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
+
+// === Vérification des variables d'environnement ===
+console.log("SUPABASE_URL:", process.env.SUPABASE_URL || "MISSING");
+console.log("SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "OK" : "MISSING");
+
+// === Importer processAudio après le check ===
+import { processAudio } from "./utils/processAudio.js";
 
 // === Endpoint de test simple ===
 app.get("/", (req, res) => {

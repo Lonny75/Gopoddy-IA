@@ -1,41 +1,58 @@
 // utils/processAudio.js
+import { createClient } from "@supabase/supabase-js";
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
-import { createClient } from "@supabase/supabase-js";
-import https from "https";
+import { fileURLToPath } from "url";
 
-// Vérification des variables d'environnement
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+// Pour __dirname en ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error("❌ Supabase URL ou Service Role Key manquante !");
-  throw new Error("Supabase URL ou Service Role Key manquante !");
+// --- Fonction pour créer le client Supabase ---
+function getSupabaseClient() {
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Supabase URL ou Service Role Key manquante !");
+  }
+
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-// Télécharge un fichier depuis une URL vers un chemin local
-export async function downloadFile(url, dest) {
+// --- Télécharger le fichier localement ---
+async function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, (response) => {
-      if (response.statusCode !== 200) {
-        return reject(new Error(`Download failed with status ${response.statusCode}`));
-      }
-      response.pipe(file);
-      file.on("finish", () => {
-        file.close(resolve);
-      });
-    }).on("error", (err) => {
-      fs.unlink(dest, () => reject(err));
+    import("node-fetch").then(({ default: fetch }) => {
+      fetch(url)
+        .then((res) => {
+          if (!res.ok) throw new Error(`Erreur téléchargement: ${res.status}`);
+          const fileStream = fs.createWriteStream(dest);
+          res.body.pipe(fileStream);
+          fileStream.on("finish", resolve);
+          fileStream.on("error", reject);
+        })
+        .catch(reject);
     });
   });
 }
 
-// Fonction principale de traitement
-export async function processAudio(inputUrl, projectId, userId, options = {}) {
+// --- Obtenir la durée audio ---
+function getAudioDuration(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) return reject(err);
+      resolve(metadata.format.duration);
+    });
+  });
+}
+
+// --- Fonction principale ---
+export async function processAudio(inputUrl, projectId, options = {}) {
+  const supabase = getSupabaseClient();
+  const bucket = process.env.SUPABASE_BUCKET_NAME || "audio-files";
+
   try {
     const preset = options.preset || "standard";
     if (!["standard", "medium", "advanced"].includes(preset)) {
@@ -44,12 +61,14 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
     console.log(`🎛️ Applying preset: ${preset}`);
 
-    const inputPath = `/tmp/input_${projectId}.mp3`;
-    const outputPath = `/tmp/output_${projectId}.mp3`;
+    const inputPath = path.join("/tmp", `input_${projectId}.mp3`);
+    const outputPath = path.join("/tmp", `output_${projectId}.mp3`);
 
+    // Télécharger le fichier
     console.log("⬇️ Downloading input file...");
     await downloadFile(inputUrl, inputPath);
 
+    // Traiter avec FFmpeg
     console.log("🎚️ Processing audio with FFmpeg...");
     await new Promise((resolve, reject) => {
       let command = ffmpeg(inputPath).audioCodec("libmp3lame");
@@ -74,71 +93,60 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
           console.log("✅ Audio processed successfully");
           resolve();
         })
-        .on("error", (err) => {
-          console.error("❌ FFmpeg error:", err);
-          reject(err);
-        })
+        .on("error", reject)
         .save(outputPath);
     });
 
-    // Upload sur Supabase Storage
-    const storagePath = `processed/output_${projectId}.mp3`;
-    console.log("⬆️ Uploading processed file to Supabase Storage...");
-    const { data, error: uploadError } = await supabase.storage
-      .from("audio-files")
-      .upload(storagePath, fs.createReadStream(outputPath), {
-        contentType: "audio/mpeg",
-        upsert: true,
-      });
+    // Taille et durée
+    const stats = fs.statSync(outputPath);
+    const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+    const duration = await getAudioDuration(outputPath);
+
+    // Upload vers Supabase
+    const supabasePath = `processed/${projectId}_${Date.now()}.mp3`;
+    const fileData = fs.readFileSync(outputPath);
+
+    const { error: uploadError } = await supabase.storage
+      .from(bucket)
+      .upload(supabasePath, fileData, { upsert: true });
 
     if (uploadError) throw uploadError;
 
-    const { publicUrl, error: urlError } = supabase.storage
-      .from("audio-files")
-      .getPublicUrl(storagePath);
+    const { data: publicData } = supabase.storage
+      .from(bucket)
+      .getPublicUrl(supabasePath);
 
-    if (urlError) throw urlError;
+    const processedUrl = publicData.publicUrl;
 
     // Mise à jour de la DB
-    console.log("📝 Updating database with processed file info...");
     const { error: dbError } = await supabase
       .from("projects")
       .update({
-        processed_file_path: storagePath,
-        processed_file_url: publicUrl,
+        processed_file_path: supabasePath,
+        processed_file_url: processedUrl,
+        duration,
+        size_mb: sizeMB,
         status: "completed",
-        preset: preset,
       })
       .eq("id", projectId);
 
     if (dbError) throw dbError;
 
-    const stats = fs.statSync(outputPath);
-    const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-
     return {
-      success: true,
-      projectId,
-      userId,
-      result: {
-        preset,
-        outputPath: storagePath,
-        publicUrl,
-        sizeMB,
-        message: "Processing terminé avec succès",
-      },
+      preset,
+      outputPath: processedUrl,
+      sizeMB,
+      duration,
+      message: "Processing terminé avec succès",
     };
+
   } catch (err) {
     console.error("❌ Processing failed:", err);
-
-    // Mise à jour du statut en cas d'erreur
-    if (projectId) {
-      await supabase
-        .from("projects")
-        .update({ status: "failed", error_message: err.message })
-        .eq("id", projectId);
-    }
-
+    // Mettre à jour le statut en erreur dans DB si possible
+    try {
+      const supabase = getSupabaseClient();
+      await supabase.from("projects").update({ status: "failed" }).eq("id", projectId);
+    } catch {}
     throw err;
   }
 }

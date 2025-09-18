@@ -1,39 +1,14 @@
 {
-  "name": "bolt-processing-api",
+  "name": "bolt-api",
   "version": "1.0.0",
-  "description": "API de traitement audio (Bolt) connectée à Supabase pour le mastering, la découpe, la suppression des silences et la transcription.",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "lint": "eslint ."
+    "start": "node index.js"
   },
-  "keywords": [
-    "audio",
-    "processing",
-    "ffmpeg",
-    "supabase",
-    "render",
-    "api",
-    "bolt"
-  ],
-  "author": "Gopoddy",
-  "license": "MIT",
   "dependencies": {
-    "axios": "^1.7.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.0",
-    "express": "^4.19.0",
-    "morgan": "^1.10.0",
-    "pg": "^8.11.0",
-    "@supabase/supabase-js": "^2.39.7"
-  },
-  "devDependencies": {
-    "eslint": "^8.57.0",
-    "nodemon": "^3.1.0"
-  },
-  "engines": {
-    "node": ">=18.x"
+    "@supabase/supabase-js": "^2.45.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   }
 }

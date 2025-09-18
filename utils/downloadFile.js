@@ -1,26 +1,23 @@
 import fs from "fs";
+import https from "https";
+import http from "http";
 import path from "path";
 
-/**
- * Télécharge un fichier depuis une URL et l’enregistre en local
- * @param {string} url - URL du fichier source
- * @param {string} destFolder - dossier local de destination
- * @returns {Promise<string>} chemin local du fichier téléchargé
- */
-export async function downloadFile(url, destFolder) {
-  console.log(`⬇️ [downloadFile] Downloading from: ${url}`);
+export function downloadFile(url, dest) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(dest);
+    const client = url.startsWith("https") ? https : http;
 
-  const fileName = path.basename(new URL(url).pathname);
-  const destPath = path.join(destFolder, fileName);
-
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Échec du téléchargement: ${response.statusText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  fs.writeFileSync(destPath, Buffer.from(arrayBuffer));
-
-  console.log(`✅ [downloadFile] File saved to: ${destPath}`);
-  return destPath;
+    client.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        return reject(new Error(`Download failed with status ${response.statusCode}`));
+      }
+      response.pipe(file);
+      file.on("finish", () => {
+        file.close(resolve);
+      });
+    }).on("error", (err) => {
+      fs.unlink(dest, () => reject(err));
+    });
+  });
 }

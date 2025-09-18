@@ -28,12 +28,8 @@ function downloadFile(url, dest) {
         return reject(new Error(`Download failed with status ${response.statusCode}`));
       }
       response.pipe(file);
-      file.on("finish", () => {
-        file.close(resolve);
-      });
-    }).on("error", (err) => {
-      fs.unlink(dest, () => reject(err));
-    });
+      file.on("finish", () => file.close(resolve));
+    }).on("error", (err) => fs.unlink(dest, () => reject(err)));
   });
 }
 
@@ -49,13 +45,14 @@ function getAudioDuration(filePath) {
 
 // --- Traitement audio principal ---
 export async function processAudio(inputUrl, projectId, options = {}) {
-  const preset = options.preset || "standard";
-  if (!["standard", "medium", "advanced"].includes(preset)) {
-    throw new Error(`Preset inconnu: ${preset}`);
+  const type = options.type || "music"; // "music" ou "podcast"
+
+  if (!["music", "podcast"].includes(type)) {
+    throw new Error(`Type inconnu: ${type}`);
   }
 
   console.log(`🚀 Starting processing for project ${projectId}`);
-  console.log(`🎛️ Applying preset: ${preset}`);
+  console.log(`🎛️ Applying type: ${type}`);
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
   const outputPath = `/tmp/output_${projectId}.mp3`;
@@ -69,18 +66,20 @@ export async function processAudio(inputUrl, projectId, options = {}) {
   await new Promise((resolve, reject) => {
     let command = ffmpeg(inputPath).audioCodec("libmp3lame");
 
-    if (preset === "standard") {
-      command = command.audioFilters("loudnorm");
-    } else if (preset === "medium") {
+    if (type === "music") {
       command = command.audioFilters([
-        "loudnorm",
-        "compand=attacks=0:decays=0:points=-80/-80|-20/-20|0/-10|20/-8"
+        "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=7", // gain légèrement augmenté
+        "dynaudnorm=f=150:g=15",
+        "equalizer=f=1000:t=q:w=1:g=3",
+        "aformat=sample_fmts=s16:channel_layouts=stereo"
       ]);
-    } else if (preset === "advanced") {
+    } else if (type === "podcast") {
       command = command.audioFilters([
-        "loudnorm",
-        "compand=attacks=0:decays=0:points=-80/-80|-20/-20|0/-10|20/-8",
-        "highpass=f=200, lowpass=f=12000"
+        "highpass=f=80",
+        "lowpass=f=12000",
+        "afftdn=nf=-25",
+        "acompressor=threshold=-20dB:ratio=3:attack=10:release=200:makeup=5",
+        "loudnorm=I=-16:LRA=7:TP=-1.5"
       ]);
     }
 
@@ -130,7 +129,7 @@ export async function processAudio(inputUrl, projectId, options = {}) {
   const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
   return {
-    preset,
+    type,
     outputPath: publicUrl,
     sizeMB,
     duration,

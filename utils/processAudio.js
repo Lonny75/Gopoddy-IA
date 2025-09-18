@@ -1,45 +1,52 @@
 // utils/processAudio.js
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
+import { get } from "https";
 import path from "path";
 
-
-// Télécharge le fichier source vers /tmp
-async function downloadFile(url, dest) {
-  const writer = fs.createWriteStream(dest);
-  const response = await axios({ url, method: "GET", responseType: "stream" });
-  response.data.pipe(writer);
+// Télécharge le fichier source vers /tmp sans axios
+export function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
-    writer.on("finish", resolve);
-    writer.on("error", reject);
+    const file = fs.createWriteStream(dest);
+    const request = get(url, (response) => {
+      if (response.statusCode !== 200) {
+        return reject(new Error(`Failed to get '${url}' (${response.statusCode})`));
+      }
+      response.pipe(file);
+    });
+
+    file.on("finish", () => file.close(resolve));
+    file.on("error", (err) => {
+      fs.unlink(dest, () => reject(err));
+    });
+
+    request.on("error", (err) => {
+      fs.unlink(dest, () => reject(err));
+    });
   });
 }
 
 // Fonction principale
 export async function processAudio(inputUrl, projectId, options = {}) {
   try {
-    // Vérification preset
     const preset = options.preset || "standard";
-    if (!["standard", "medium", "advanced"].includes(preset)) {
+    const validPresets = ["standard", "medium", "advanced"];
+    if (!validPresets.includes(preset)) {
       throw new Error(`Preset inconnu: ${preset}`);
     }
 
     console.log(`🎛️ Applying preset: ${preset}`);
 
-    // Préparer chemins
     const inputPath = `/tmp/input_${projectId}.mp3`;
     const outputPath = `/tmp/output_${projectId}.mp3`;
 
-    // Télécharger le fichier source
     console.log("⬇️ Downloading input file...");
     await downloadFile(inputUrl, inputPath);
 
     console.log("🎚️ Processing audio with FFmpeg...");
-
     await new Promise((resolve, reject) => {
       let command = ffmpeg(inputPath).audioCodec("libmp3lame");
 
-      // Exemple de presets
       if (preset === "standard") {
         command = command.audioFilters("loudnorm");
       } else if (preset === "medium") {
@@ -67,7 +74,6 @@ export async function processAudio(inputUrl, projectId, options = {}) {
         .save(outputPath);
     });
 
-    // Vérifier la taille de sortie
     const stats = fs.statSync(outputPath);
     const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
@@ -77,7 +83,6 @@ export async function processAudio(inputUrl, projectId, options = {}) {
       sizeMB: fileSizeMB,
       message: "Processing terminé avec succès",
     };
-
   } catch (err) {
     console.error("❌ Processing failed:", err);
     throw err;

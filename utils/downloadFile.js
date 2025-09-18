@@ -1,25 +1,26 @@
-// utils/downloadFile.js
 import fs from "fs";
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+import path from "path";
 
 /**
- * Télécharge un fichier depuis Supabase Storage vers localPath
+ * Télécharge un fichier depuis une URL et l’enregistre en local
+ * @param {string} url - URL du fichier source
+ * @param {string} destFolder - dossier local de destination
+ * @returns {Promise<string>} chemin local du fichier téléchargé
  */
-export async function downloadFile(storagePath, localPath) {
-  const { data, error } = await supabase.storage
-    .from("audio-files")
-    .download(storagePath);
+export async function downloadFile(url, destFolder) {
+  console.log(`⬇️ [downloadFile] Downloading from: ${url}`);
 
-  if (error) throw error;
+  const fileName = path.basename(new URL(url).pathname);
+  const destPath = path.join(destFolder, fileName);
 
-  const buffer = Buffer.from(await data.arrayBuffer());
-  fs.writeFileSync(localPath, buffer);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Échec du téléchargement: ${response.statusText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  fs.writeFileSync(destPath, Buffer.from(arrayBuffer));
+
+  console.log(`✅ [downloadFile] File saved to: ${destPath}`);
+  return destPath;
 }

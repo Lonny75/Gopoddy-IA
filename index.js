@@ -1,125 +1,88 @@
-// index.js - API Bolt (Render)
+// index.js
 import express from "express";
-import bodyParser from "body-parser";
+import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-import { processAudio } from "./utils/processAudio.js";
+import { processAudio } from "./processAudio.js";
+import { getAudioDuration } from "./getAudioDuration.js";
 
 dotenv.config();
 
 const app = express();
-app.use(bodyParser.json());
+app.use(cors());
+app.use(express.json());
 
-// 🔹 Init Supabase avec la Service Role Key (Render > Environment Variables)
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// ============= ROUTES =============
-
-// 1️⃣ Créer une tâche
-app.post("/create-task", async (req, res) => {
-  try {
-    const { projectId, userId, preset } = req.body;
-
-    if (!projectId || !userId) {
-      return res.status(400).json({ error: "projectId et userId requis" });
-    }
-
-    const { data, error } = await supabase
-      .from("processing_tasks")
-      .insert([
-        {
-          project_id: projectId,
-          user_id: userId,
-          preset,
-          status: "pending",
-        },
-      ])
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    res.json({ task: data });
-  } catch (err) {
-    console.error("Erreur /create-task:", err.message);
-    res.status(500).json({ error: err.message });
-  }
+// Endpoint de santé
+app.get("/", (req, res) => {
+  res.send("✅ Bolt Processing API is running on Render!");
 });
 
-// 2️⃣ Traiter une tâche existante
+// Traitement audio
 app.post("/process-audio", async (req, res) => {
+  const { inputUrl, projectId, userId, options } = req.body;
+
+  if (!inputUrl || !projectId || !userId) {
+    return res.status(400).json({ error: "Missing parameters" });
+  }
+
   try {
-    const { taskId } = req.body;
-    if (!taskId) {
-      return res.status(400).json({ error: "taskId manquant" });
-    }
+    console.log(`🚀 Starting processing for project ${projectId}`);
 
-    // Récupérer la tâche
-    const { data: task, error: taskError } = await supabase
-      .from("processing_tasks")
-      .select("id, project_id, preset, projects(file_path)")
-      .eq("id", taskId)
-      .single();
-
-    if (taskError || !task) {
-      return res.status(404).json({ error: "Impossible de trouver la tâche processing_tasks" });
-    }
-
-    const inputPath = task.projects?.file_path;
-    if (!inputPath) {
-      return res.status(400).json({ error: "file_path introuvable dans le projet" });
-    }
-
-    // Mettre la tâche en processing
+    // Mettre à jour le statut en "processing"
     await supabase
-      .from("processing_tasks")
+      .from("projects")
       .update({ status: "processing" })
-      .eq("id", taskId);
+      .eq("id", projectId);
 
     // Lancer le traitement FFmpeg
-    const { outputUrl, duration } = await processAudio({
-      inputPath,
-      preset: task.preset,
-      projectId: task.project_id,
-    });
+    const processedFilePath = await processAudio(inputUrl, projectId, options);
 
-    // Mettre à jour la DB
-    await supabase
-      .from("processing_tasks")
-      .update({ status: "completed" })
-      .eq("id", taskId);
+    // Récupérer la durée
+    const duration = await getAudioDuration(processedFilePath);
 
+    // Générer URL publique
+    const { data } = supabase.storage
+      .from("audio-files")
+      .getPublicUrl(processedFilePath);
+    const outputUrl = data.publicUrl;
+
+    // Mettre à jour en DB
     await supabase
       .from("projects")
       .update({
         status: "completed",
-        processed_file_path: outputUrl,
+        processed_file_path: processedFilePath,
+        processed_url: outputUrl,
         duration,
       })
-      .eq("id", task.project_id);
+      .eq("id", projectId);
 
-    res.json({ success: true, outputUrl, duration });
+    console.log(`✅ Processing completed for project ${projectId}`);
+
+    res.json({
+      projectId,
+      outputUrl,
+      duration,
+      status: "completed",
+    });
   } catch (err) {
-    console.error("Erreur /process-audio:", err.message);
+    console.error("❌ Processing failed:", err);
 
-    // Marquer la tâche en failed
-    if (req.body.taskId) {
-      await supabase
-        .from("processing_tasks")
-        .update({ status: "failed" })
-        .eq("id", req.body.taskId);
-    }
+    await supabase
+      .from("projects")
+      .update({ status: "failed" })
+      .eq("id", projectId);
 
     res.status(500).json({ error: err.message });
   }
 });
 
-// =================================
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Bolt API en écoute sur le port ${PORT}`);
+  console.log(`⚡ Bolt Processing API running on port ${PORT}`);
 });

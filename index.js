@@ -3,8 +3,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-import { processAudio } from "./processAudio.js";
-import { getAudioDuration } from "./getAudioDuration.js";
+import { processAudio } from './utils/processAudio.js';
+import { getAudioDuration } from './utils/getAudioDuration.js';
+
 
 dotenv.config();
 

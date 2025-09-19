@@ -6,7 +6,6 @@ import { createClient } from "@supabase/supabase-js";
 import https from "https";
 import http from "http";
 
-// --- Supabase ---
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET_NAME || "audio-files";
@@ -17,12 +16,11 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// --- Téléchargement sans dépendances ---
+// --- Téléchargement ---
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
     const client = url.startsWith("https") ? https : http;
-
     client.get(url, (response) => {
       if (response.statusCode !== 200) {
         return reject(new Error(`Download failed with status ${response.statusCode}`));
@@ -33,7 +31,7 @@ function downloadFile(url, dest) {
   });
 }
 
-// --- Obtenir durée audio via ffmpeg ---
+// --- Durée audio ---
 function getAudioDuration(filePath) {
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -43,37 +41,38 @@ function getAudioDuration(filePath) {
   });
 }
 
-// --- Traitement audio principal ---
 export async function processAudio(inputUrl, projectId, options = {}) {
-  const type = options.type || "music"; // "music" ou "podcast"
+  const type = options.type || "music";
 
   if (!["music", "podcast"].includes(type)) {
     throw new Error(`Type inconnu: ${type}`);
   }
 
-  console.log(`🚀 Starting processing for project ${projectId}`);
-  console.log(`🎛️ Applying type: ${type}`);
+  console.log(`🚀 Processing project ${projectId} (${type})`);
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
-  const outputPath = `/tmp/output_${projectId}.mp3`;
+  const baseName = path.basename(inputUrl).split("-").slice(1).join("-").replace(".mp3", "");
+  const timestamp = Date.now();
+  const outputFileName = `processed/${projectId}/${baseName}-${type}-v${timestamp}.mp3`;
+  const outputPath = `/tmp/${outputFileName.split("/").pop()}`;
 
-  // --- Télécharger le fichier source ---
+  // Télécharger input
   console.log("⬇️ Downloading input file...");
   await downloadFile(inputUrl, inputPath);
 
-  // --- Traitement FFmpeg ---
-  console.log("🎚️ Processing audio with FFmpeg...");
+  // Traitement FFmpeg
+  console.log("🎚️ Processing with FFmpeg...");
   await new Promise((resolve, reject) => {
     let command = ffmpeg(inputPath).audioCodec("libmp3lame");
 
     if (type === "music") {
       command = command.audioFilters([
-        "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=7", // gain légèrement augmenté
+        "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=7",
         "dynaudnorm=f=150:g=15",
         "equalizer=f=1000:t=q:w=1:g=3",
         "aformat=sample_fmts=s16:channel_layouts=stereo"
       ]);
-    } else if (type === "podcast") {
+    } else {
       command = command.audioFilters([
         "highpass=f=80",
         "lowpass=f=12000",
@@ -84,55 +83,63 @@ export async function processAudio(inputUrl, projectId, options = {}) {
     }
 
     command
-      .on("end", () => {
-        console.log("✅ Audio processed successfully");
-        resolve();
-      })
-      .on("error", (err) => {
-        console.error("❌ FFmpeg error:", err);
-        reject(err);
-      })
+      .on("end", () => resolve())
+      .on("error", (err) => reject(err))
       .save(outputPath);
   });
 
-  // --- Obtenir durée ---
   const duration = await getAudioDuration(outputPath);
+  const stats = fs.statSync(outputPath);
+  const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
-  // --- Upload vers Supabase ---
-  const fileName = `processed_${projectId}.mp3`;
-  console.log(`⬆️ Uploading to Supabase: ${fileName}`);
+  // Upload vers Supabase
+  console.log(`⬆️ Uploading: ${outputFileName}`);
   const fileData = fs.readFileSync(outputPath);
 
   const { error: uploadError } = await supabase.storage
     .from(SUPABASE_BUCKET)
-    .upload(fileName, fileData, { upsert: true });
+    .upload(outputFileName, fileData, { upsert: false });
 
   if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
 
-  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${fileName}`;
+  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${outputFileName}`;
 
-  // --- Mise à jour de la DB ---
-  const { error: dbError } = await supabase
+  // Insérer dans masterings
+  const { data: masteringRow, error: masteringError } = await supabase
+    .from("masterings")
+    .insert([{
+      project_id: projectId,
+      user_id: options.userId,
+      type,
+      version: options.version || 1,
+      file_path: outputFileName,
+      file_url: publicUrl,
+      duration,
+      size_mb: sizeMB,
+      settings: options.settings || {}
+    }])
+    .select()
+    .single();
+
+  if (masteringError) throw new Error(`DB insert failed: ${masteringError.message}`);
+
+  // Mettre à jour le projet avec le dernier fichier
+  await supabase
     .from("projects")
     .update({
-      processed_file_path: fileName,
+      processed_file_path: outputFileName,
       processed_file_url: publicUrl,
       duration,
       status: "completed"
     })
     .eq("id", projectId);
 
-  if (dbError) throw new Error(`DB update failed: ${dbError.message}`);
-
-  // --- Retour ---
-  const stats = fs.statSync(outputPath);
-  const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-
   return {
     type,
-    outputPath: publicUrl,
+    outputUrl: publicUrl,
     sizeMB,
     duration,
-    message: "Processing terminé et fichier uploadé sur Supabase"
+    masteringId: masteringRow.id,
+    message: "✅ Processing terminé et sauvegardé"
   };
 }

@@ -23,13 +23,15 @@ function downloadFile(url, dest) {
     const file = fs.createWriteStream(dest);
     const client = url.startsWith("https") ? https : http;
 
-    client.get(url, (response) => {
-      if (response.statusCode !== 200) {
-        return reject(new Error(`Download failed with status ${response.statusCode}`));
-      }
-      response.pipe(file);
-      file.on("finish", () => file.close(resolve));
-    }).on("error", (err) => fs.unlink(dest, () => reject(err)));
+    client
+      .get(url, (response) => {
+        if (response.statusCode !== 200) {
+          return reject(new Error(`Download failed with status ${response.statusCode}`));
+        }
+        response.pipe(file);
+        file.on("finish", () => file.close(resolve));
+      })
+      .on("error", (err) => fs.unlink(dest, () => reject(err)));
   });
 }
 
@@ -164,7 +166,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   return {
     type,
     friendlyName,
-    folder: targetFolder,
+    folder: targetFolder, // 👈 ajout clair du dossier de destination
     outputPath: publicUrl,
     sizeMB,
     duration,

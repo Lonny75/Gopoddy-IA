@@ -17,27 +17,23 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// --- Téléchargement sans dépendances ---
+// --- Téléchargement du fichier ---
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
     const client = url.startsWith("https") ? https : http;
 
-    client
-      .get(url, (response) => {
-        if (response.statusCode !== 200) {
-          return reject(
-            new Error(`Download failed with status ${response.statusCode}`)
-          );
-        }
-        response.pipe(file);
-        file.on("finish", () => file.close(resolve));
-      })
-      .on("error", (err) => fs.unlink(dest, () => reject(err)));
+    client.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        return reject(new Error(`Download failed with status ${response.statusCode}`));
+      }
+      response.pipe(file);
+      file.on("finish", () => file.close(resolve));
+    }).on("error", (err) => fs.unlink(dest, () => reject(err)));
   });
 }
 
-// --- Obtenir durée audio via ffmpeg ---
+// --- Obtenir durée audio ---
 function getAudioDuration(filePath) {
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -47,32 +43,59 @@ function getAudioDuration(filePath) {
   });
 }
 
-// --- Extraction nom "friendly" ---
-function extractFriendlyName(urlOrPath) {
-  const base = path.basename(urlOrPath, path.extname(urlOrPath));
-  const parts = base.split("-");
-  if (parts.length > 1) {
-    return parts[1].replace(/_/g, " ");
+// --- Extraction du Friendly Name depuis le nom de fichier ---
+function getFriendlyName(inputUrl) {
+  const fileName = path.basename(inputUrl, path.extname(inputUrl)); // ex: 1758271977749-full_arcade_
+  const parts = fileName.split("-");
+  if (parts.length >= 2) {
+    return parts.slice(1).join("-"); // ex: full_arcade_
   }
-  return base;
+  return fileName;
+}
+
+// --- Vérification / création projet ---
+async function ensureProjectExists(projectId, userId) {
+  const { data: project, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .single();
+
+  if (error && error.code !== "PGRST116") throw error; // autre erreur
+
+  if (!project) {
+    const { error: insertError } = await supabase
+      .from("projects")
+      .insert([{ id: projectId, user_id: userId, status: "processing" }]);
+    if (insertError) throw insertError;
+    console.log(`🆕 Projet créé automatiquement : ${projectId}`);
+  }
 }
 
 // --- Traitement audio principal ---
 export async function processAudio(inputUrl, projectId, userId, options = {}) {
-  const type = options.type === "podcast" ? "podcast" : "music"; // ✅ safe type
-  const friendlyName = extractFriendlyName(inputUrl);
+  const type = options.type || "music"; // "music" ou "podcast"
 
-  console.log(`🚀 Starting processing for project ${projectId}, user ${userId}`);
-  console.log(`🎛️ Type: ${type}, FriendlyName: ${friendlyName}`);
+  if (!["music", "podcast"].includes(type)) {
+    throw new Error(`Type inconnu: ${type}`);
+  }
+
+  console.log(`🚀 Processing project ${projectId} (type: ${type}, user: ${userId})`);
+
+  // --- Vérification projet ---
+  await ensureProjectExists(projectId, userId);
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
-  const outputPath = `/tmp/output_${projectId}.mp3`;
+  const friendlyName = getFriendlyName(inputUrl).replace(/_/g, " ").trim();
+  const timestamp = Date.now();
+  const outputPath = `/tmp/output_${projectId}_${type}_${timestamp}.mp3`;
+  const supabasePath = `processed/${projectId}/${friendlyName}_${type}-v${timestamp}.mp3`;
 
-  // --- Télécharger le fichier source ---
+  // --- Download ---
   console.log("⬇️ Downloading input file...");
   await downloadFile(inputUrl, inputPath);
 
-  // --- Traitement FFmpeg ---
+  // --- FFmpeg processing ---
   console.log("🎚️ Processing with FFmpeg...");
   await new Promise((resolve, reject) => {
     let command = ffmpeg(inputPath).audioCodec("libmp3lame");
@@ -82,7 +105,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
         "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=7",
         "dynaudnorm=f=150:g=15",
         "equalizer=f=1000:t=q:w=1:g=3",
-        "aformat=sample_fmts=s16:channel_layouts=stereo",
+        "aformat=sample_fmts=s16:channel_layouts=stereo"
       ]);
     } else if (type === "podcast") {
       command = command.audioFilters([
@@ -90,7 +113,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
         "lowpass=f=12000",
         "afftdn=nf=-25",
         "acompressor=threshold=-20dB:ratio=3:attack=10:release=200:makeup=5",
-        "loudnorm=I=-16:LRA=7:TP=-1.5",
+        "loudnorm=I=-16:LRA=7:TP=-1.5"
       ]);
     }
 
@@ -106,58 +129,42 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
       .save(outputPath);
   });
 
-  // --- Obtenir durée ---
+  // --- Durée ---
   const duration = await getAudioDuration(outputPath);
 
-  // --- Upload vers Supabase ---
-  const timestamp = Date.now();
-  const fileName = `processed/${projectId}/${friendlyName}_${type}_${timestamp}.mp3`;
-  console.log(`⬆️ Uploading: ${fileName}`);
+  // --- Upload Supabase ---
   const fileData = fs.readFileSync(outputPath);
-
   const { error: uploadError } = await supabase.storage
     .from(SUPABASE_BUCKET)
-    .upload(fileName, fileData, { upsert: false });
+    .upload(supabasePath, fileData, { upsert: false });
 
   if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
 
-  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${fileName}`;
+  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${supabasePath}`;
 
-  // --- Taille du fichier ---
-  const stats = fs.statSync(outputPath);
-  const size = stats.size;
-
-  // --- Insertion dans masterings ---
-  const { error: insertError } = await supabase.from("masterings").insert({
-    project_id: projectId,
-    user_id: userId,
-    type, // ✅ "music" ou "podcast"
-    file_path: fileName,
-    file_url: publicUrl,
-    duration,
-    size,
-  });
-
-  if (insertError) throw new Error(`DB insert failed: ${insertError.message}`);
-
-  // --- Mise à jour du projet ---
+  // --- Insert dans masterings ---
   const { error: dbError } = await supabase
-    .from("projects")
-    .update({
-      processed_file_path: fileName,
-      processed_file_url: publicUrl,
-      duration,
-      status: "completed",
-    })
-    .eq("id", projectId);
+    .from("masterings")
+    .insert([{
+      project_id: projectId,
+      user_id: userId,
+      type,
+      file_path: supabasePath,
+      file_url: publicUrl,
+      duration
+    }]);
 
-  if (dbError) throw new Error(`DB update failed: ${dbError.message}`);
+  if (dbError) throw new Error(`DB insert failed: ${dbError.message}`);
+
+  const stats = fs.statSync(outputPath);
+  const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
   return {
     type,
-    outputUrl: publicUrl,
-    sizeMB: (size / (1024 * 1024)).toFixed(2),
+    friendlyName,
+    outputPath: publicUrl,
+    sizeMB,
     duration,
-    message: "Processing terminé et fichier uploadé sur Supabase",
+    message: "Processing terminé et fichier uploadé sur Supabase"
   };
 }

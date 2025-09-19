@@ -1,3 +1,4 @@
+// utils/processAudio.js
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
@@ -60,7 +61,7 @@ async function ensureProjectExists(projectId, userId) {
     .eq("id", projectId)
     .single();
 
-  if (error && error.code !== "PGRST116") throw error; // autre erreur
+  if (error && error.code !== "PGRST116") throw error;
 
   if (!project) {
     const { error: insertError } = await supabase
@@ -88,7 +89,10 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   const friendlyName = getFriendlyName(inputUrl);
   const timestamp = Date.now();
   const outputPath = `/tmp/output_${projectId}_${type}_${timestamp}.mp3`;
-  const supabasePath = `processed/${projectId}/${friendlyName}_${type}-v${timestamp}.mp3`;
+
+  // 📂 Dossier cible en fonction du type
+  const targetFolder = type === "podcast" ? "podcast-master" : "music-master";
+  const supabasePath = `${targetFolder}/${friendlyName}_${type}-v${timestamp}.mp3`;
 
   // --- Télécharger fichier ---
   console.log("⬇️ Downloading input file...");
@@ -160,9 +164,10 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   return {
     type,
     friendlyName,
+    folder: targetFolder,
     outputPath: publicUrl,
     sizeMB,
     duration,
-    message: "Processing terminé et fichier uploadé sur Supabase"
+    message: `Processing terminé et fichier uploadé dans ${targetFolder}`
   };
 }

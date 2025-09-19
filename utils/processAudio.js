@@ -1,4 +1,3 @@
-// utils/processAudio.js
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
@@ -17,7 +16,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// --- Téléchargement du fichier ---
+// --- Télécharger le fichier depuis URL ---
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
@@ -43,17 +42,17 @@ function getAudioDuration(filePath) {
   });
 }
 
-// --- Extraction du Friendly Name depuis le nom de fichier ---
+// --- Extraire friendly name depuis le fichier ---
 function getFriendlyName(inputUrl) {
-  const fileName = path.basename(inputUrl, path.extname(inputUrl)); // ex: 1758271977749-full_arcade_
+  const fileName = path.basename(inputUrl, path.extname(inputUrl));
   const parts = fileName.split("-");
   if (parts.length >= 2) {
-    return parts.slice(1).join("-"); // ex: full_arcade_
+    return parts.slice(1).join("-").replace(/_/g, " ").trim();
   }
-  return fileName;
+  return fileName.replace(/_/g, " ").trim();
 }
 
-// --- Vérification / création projet ---
+// --- Créer projet si inexistant ---
 async function ensureProjectExists(projectId, userId) {
   const { data: project, error } = await supabase
     .from("projects")
@@ -66,7 +65,7 @@ async function ensureProjectExists(projectId, userId) {
   if (!project) {
     const { error: insertError } = await supabase
       .from("projects")
-      .insert([{ id: projectId, user_id: userId, status: "processing" }]);
+      .insert([{ id: projectId, user_id: userId, name: "Projet audio", status: "processing" }]);
     if (insertError) throw insertError;
     console.log(`🆕 Projet créé automatiquement : ${projectId}`);
   }
@@ -86,16 +85,16 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   await ensureProjectExists(projectId, userId);
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
-  const friendlyName = getFriendlyName(inputUrl).replace(/_/g, " ").trim();
+  const friendlyName = getFriendlyName(inputUrl);
   const timestamp = Date.now();
   const outputPath = `/tmp/output_${projectId}_${type}_${timestamp}.mp3`;
   const supabasePath = `processed/${projectId}/${friendlyName}_${type}-v${timestamp}.mp3`;
 
-  // --- Download ---
+  // --- Télécharger fichier ---
   console.log("⬇️ Downloading input file...");
   await downloadFile(inputUrl, inputPath);
 
-  // --- FFmpeg processing ---
+  // --- Traitement FFmpeg ---
   console.log("🎚️ Processing with FFmpeg...");
   await new Promise((resolve, reject) => {
     let command = ffmpeg(inputPath).audioCodec("libmp3lame");
@@ -142,19 +141,18 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
   const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${supabasePath}`;
 
-  // --- Insert dans masterings ---
+  // --- Mise à jour projet uniquement ---
   const { error: dbError } = await supabase
-    .from("masterings")
-    .insert([{
-      project_id: projectId,
-      user_id: userId,
-      type,
-      file_path: supabasePath,
-      file_url: publicUrl,
-      duration
-    }]);
+    .from("projects")
+    .update({
+      processed_file_path: supabasePath,
+      processed_file_url: publicUrl,
+      duration,
+      status: "completed"
+    })
+    .eq("id", projectId);
 
-  if (dbError) throw new Error(`DB insert failed: ${dbError.message}`);
+  if (dbError) throw new Error(`DB update failed: ${dbError.message}`);
 
   const stats = fs.statSync(outputPath);
   const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);

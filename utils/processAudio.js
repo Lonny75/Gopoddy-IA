@@ -17,7 +17,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// --- Télécharger le fichier depuis URL ---
+// --- Télécharger le fichier depuis une URL ---
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
@@ -45,11 +45,11 @@ function getAudioDuration(filePath) {
   });
 }
 
-// --- Nettoyer le nom du fichier ---
+// --- Nettoyer et formater le nom du fichier ---
 function getFriendlyName(inputUrl) {
   const fileName = path.basename(inputUrl, path.extname(inputUrl));
 
-  // supprime éventuels numéros ou timestamps "1758287142054-5_-_Sometimes"
+  // supprime éventuels numéros/timestamps du style "1758287142054-5_-_Sometimes"
   const parts = fileName.split("-");
   let base = parts.pop() || fileName;
   base = base.replace(/_/g, " ").trim();
@@ -170,13 +170,15 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   const stats = fs.statSync(outputPath);
   const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
+  // --- Retour final ---
   return {
     type,
     friendlyName,
     folder: targetFolder,
+    outputFileName,   // 👈 ajouté pour ton frontend
     outputPath: publicUrl,
     sizeMB,
     duration,
-    message: `Processing terminé et fichier uploadé dans ${targetFolder} sous le nom ${outputFileName}`
+    message: `Processing terminé ✅ Fichier disponible dans ${targetFolder} sous le nom ${outputFileName}`
   };
 }

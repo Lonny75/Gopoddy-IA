@@ -9,7 +9,6 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-// --- Vérification des variables d'environnement ---
 console.log("SUPABASE_URL:", process.env.SUPABASE_URL || "MISSING");
 console.log("SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "OK" : "MISSING");
 
@@ -18,7 +17,12 @@ app.get("/", (req, res) => {
   res.json({ message: "🚀 Bolt Processing API is running!" });
 });
 
-// --- Endpoint principal de traitement audio ---
+// --- Endpoint santé (fix pour 404 /api/status) ---
+app.get("/api/status", (req, res) => {
+  res.json({ status: "ok", message: "Bolt API en ligne ✅" });
+});
+
+// --- Endpoint principal ---
 app.post("/process-audio", async (req, res) => {
   const { inputUrl, projectId, userId, options = {} } = req.body;
 
@@ -28,11 +32,8 @@ app.post("/process-audio", async (req, res) => {
 
   try {
     console.log(`🚀 Starting processing for project ${projectId}, user ${userId}`);
-    
-    // --- Déterminer le type ---
     const type = options.type || (options.preset === "podcast" ? "podcast" : "music");
 
-    // --- Lancer le traitement ---
     const result = await processAudio(inputUrl, projectId, userId, { type });
 
     res.json({
@@ -40,8 +41,8 @@ app.post("/process-audio", async (req, res) => {
       projectId,
       userId,
       type,
-      folder: result.folder,          // 📂 ex: podcast-master / music-master
-      outputFileName: result.outputFileName, // 🆕 Nom final clair (ex: "Sometimes - Podcast.mp3")
+      folder: result.folder,
+      outputFileName: result.outputFileName,
       result
     });
   } catch (err) {
@@ -52,4 +53,5 @@ app.post("/process-audio", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`⚡ Bolt Processing API running on port ${PORT}`);
+  console.log(`📡 Healthcheck: http://localhost:${PORT}/api/status`);
 });

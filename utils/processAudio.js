@@ -48,12 +48,9 @@ function getAudioDuration(filePath) {
 // --- Nettoyer et formater le nom du fichier ---
 function getFriendlyName(inputUrl) {
   const fileName = path.basename(inputUrl, path.extname(inputUrl));
-
-  // supprime éventuels numéros/timestamps du style "1758287142054-5_-_Sometimes"
   const parts = fileName.split("-");
   let base = parts.pop() || fileName;
   base = base.replace(/_/g, " ").trim();
-
   return base;
 }
 
@@ -86,20 +83,15 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
   console.log(`🚀 Processing project ${projectId} (type: ${type}, user: ${userId})`);
 
-  // --- Vérification projet ---
   await ensureProjectExists(projectId, userId);
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
   const friendlyName = getFriendlyName(inputUrl);
 
-  // 📂 Dossier cible
   const targetFolder = type === "podcast" ? "podcast-master" : "music-master";
-
-  // 🔤 Nom final du fichier
-  const capitalizedType = type.charAt(0).toUpperCase() + type.slice(1); // Podcast / Music
+  const capitalizedType = type.charAt(0).toUpperCase() + type.slice(1);
   const outputFileName = `${friendlyName} - ${capitalizedType}.mp3`;
 
-  // 📍 Chemins locaux & Supabase
   const outputPath = `/tmp/${projectId}_${outputFileName}`;
   const supabasePath = `${targetFolder}/${outputFileName}`;
 
@@ -150,11 +142,15 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
     .from(SUPABASE_BUCKET)
     .upload(supabasePath, fileData, { upsert: true });
 
-  if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
+  if (uploadError) {
+    console.error("❌ Upload vers Supabase échoué:", uploadError.message);
+    throw new Error(`Upload failed: ${uploadError.message}`);
+  }
+  console.log(`✅ Upload réussi dans Supabase: ${supabasePath}`);
 
   const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${supabasePath}`;
 
-  // --- Mise à jour projet uniquement ---
+  // --- Mise à jour projet ---
   const { error: dbError } = await supabase
     .from("projects")
     .update({
@@ -170,12 +166,11 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   const stats = fs.statSync(outputPath);
   const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
-  // --- Retour final ---
   return {
     type,
     friendlyName,
     folder: targetFolder,
-    outputFileName,   // 👈 ajouté pour ton frontend
+    outputFileName,
     outputPath: publicUrl,
     sizeMB,
     duration,

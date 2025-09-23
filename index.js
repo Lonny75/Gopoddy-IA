@@ -32,17 +32,16 @@ app.post("/process-audio", async (req, res) => {
     // --- Déterminer le type ---
     const type = options.type || (options.preset === "podcast" ? "podcast" : "music");
 
-    // --- Choix du dossier de destination ---
-    const folder = type === "podcast" ? "podcast-master" : "music-master";
-
     // --- Lancer le traitement ---
-    const result = await processAudio(inputUrl, projectId, userId, { type, folder });
+    const result = await processAudio(inputUrl, projectId, userId, { type });
 
     res.json({
       success: true,
       projectId,
       userId,
-      folder,   // 👈 ajouté pour que ton front sache où est le fichier
+      type,
+      folder: result.folder,          // 📂 ex: podcast-master / music-master
+      outputFileName: result.outputFileName, // 🆕 Nom final clair (ex: "Sometimes - Podcast.mp3")
       result
     });
   } catch (err) {

@@ -45,14 +45,16 @@ function getAudioDuration(filePath) {
   });
 }
 
-// --- Extraire friendly name depuis le fichier ---
+// --- Nettoyer le nom du fichier ---
 function getFriendlyName(inputUrl) {
   const fileName = path.basename(inputUrl, path.extname(inputUrl));
+
+  // supprime éventuels numéros ou timestamps "1758287142054-5_-_Sometimes"
   const parts = fileName.split("-");
-  if (parts.length >= 2) {
-    return parts.slice(1).join("-").replace(/_/g, " ").trim();
-  }
-  return fileName.replace(/_/g, " ").trim();
+  let base = parts.pop() || fileName;
+  base = base.replace(/_/g, " ").trim();
+
+  return base;
 }
 
 // --- Créer projet si inexistant ---
@@ -89,12 +91,17 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
   const friendlyName = getFriendlyName(inputUrl);
-  const timestamp = Date.now();
-  const outputPath = `/tmp/output_${projectId}_${type}_${timestamp}.mp3`;
 
-  // 📂 Dossier cible en fonction du type
+  // 📂 Dossier cible
   const targetFolder = type === "podcast" ? "podcast-master" : "music-master";
-  const supabasePath = `${targetFolder}/${friendlyName}_${type}-v${timestamp}.mp3`;
+
+  // 🔤 Nom final du fichier
+  const capitalizedType = type.charAt(0).toUpperCase() + type.slice(1); // Podcast / Music
+  const outputFileName = `${friendlyName} - ${capitalizedType}.mp3`;
+
+  // 📍 Chemins locaux & Supabase
+  const outputPath = `/tmp/${projectId}_${outputFileName}`;
+  const supabasePath = `${targetFolder}/${outputFileName}`;
 
   // --- Télécharger fichier ---
   console.log("⬇️ Downloading input file...");
@@ -141,7 +148,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   const fileData = fs.readFileSync(outputPath);
   const { error: uploadError } = await supabase.storage
     .from(SUPABASE_BUCKET)
-    .upload(supabasePath, fileData, { upsert: false });
+    .upload(supabasePath, fileData, { upsert: true });
 
   if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
 
@@ -166,10 +173,10 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   return {
     type,
     friendlyName,
-    folder: targetFolder, // 👈 ajout clair du dossier de destination
+    folder: targetFolder,
     outputPath: publicUrl,
     sizeMB,
     duration,
-    message: `Processing terminé et fichier uploadé dans ${targetFolder}`
+    message: `Processing terminé et fichier uploadé dans ${targetFolder} sous le nom ${outputFileName}`
   };
 }

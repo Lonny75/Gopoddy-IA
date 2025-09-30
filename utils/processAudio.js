@@ -91,7 +91,6 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   const targetFolder = type === "podcast" ? "podcast-master" : "music-master";
   const capitalizedType = type.charAt(0).toUpperCase() + type.slice(1);
   const outputFileName = `${friendlyName} - ${capitalizedType}.mp3`;
-
   const outputPath = `/tmp/${projectId}_${outputFileName}`;
   const supabasePath = `${targetFolder}/${outputFileName}`;
 
@@ -100,24 +99,34 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   await downloadFile(inputUrl, inputPath);
 
   // --- Traitement FFmpeg ---
-  console.log("🎚️ Processing with FFmpeg...");
+  console.log(`🎚️ Processing with FFmpeg (${type})...`);
   await new Promise((resolve, reject) => {
     let command = ffmpeg(inputPath).audioCodec("libmp3lame");
 
     if (type === "music") {
+      // 🎛️ Nice Master Pro
       command = command.audioFilters([
-        "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=7",
-        "dynaudnorm=f=150:g=15",
-        "equalizer=f=1000:t=q:w=1:g=3",
+        "loudnorm=I=-14:TP=-1.5:LRA=10",
+        "acompressor=threshold=-18dB:ratio=2.5:attack=20:release=200:makeup=4",
+        "highpass=f=35",
+        "equalizer=f=60:t=q:w=1.2:g=-1",
+        "equalizer=f=150:t=q:w=1.2:g=1.5",
+        "equalizer=f=400:t=q:w=1.2:g=-0.5",
+        "equalizer=f=2000:t=q:w=1.2:g=1",
+        "equalizer=f=8000:t=q:w=2:g=2",
+        "equalizer=f=12000:t=q:w=2:g=1",
+        "alimiter=limit=0.97",
         "aformat=sample_fmts=s16:channel_layouts=stereo"
       ]);
     } else if (type === "podcast") {
+      // 🎛️ Podcast Master Pro
       command = command.audioFilters([
         "highpass=f=80",
         "lowpass=f=12000",
         "afftdn=nf=-25",
         "acompressor=threshold=-20dB:ratio=3:attack=10:release=200:makeup=5",
-        "loudnorm=I=-16:LRA=7:TP=-1.5"
+        "loudnorm=I=-16:LRA=7:TP=-1.5",
+        "aformat=sample_fmts=s16:channel_layouts=stereo"
       ]);
     }
 

@@ -44,9 +44,7 @@ function getAudioDuration(filePath) {
 
 function getFriendlyName(inputUrl) {
   const fileName = path.basename(inputUrl, path.extname(inputUrl));
-  const parts = fileName.split("-");
-  let base = parts.pop() || fileName;
-  return base.replace(/_/g, " ").trim();
+  return fileName.replace(/_/g, " ").trim();
 }
 
 async function ensureProjectExists(projectId, userId) {
@@ -67,15 +65,19 @@ async function ensureProjectExists(projectId, userId) {
   }
 }
 
-export async function processAudio(inputUrl, projectId, userId, options = {}) {
+export async function processAudio(inputUrl, projectId, userId, { outputFolder = "music-master" } = {}) {
   console.log(`🚀 Processing project ${projectId} for user ${userId}`);
+  console.log(`📂 Destination folder: ${outputFolder}`);
 
   await ensureProjectExists(projectId, userId);
 
+  // 🔹 Fichiers temporaires
   const inputPath = `/tmp/input_${projectId}.mp3`;
   const friendlyName = getFriendlyName(inputUrl);
   const outputPath = `/tmp/${projectId}_NiceMasterPro.mp3`;
-  const supabasePath = `music-master/${friendlyName}_NiceMasterPro.mp3`;
+
+  // 🔹 Chemin dans Supabase
+  const supabasePath = `${outputFolder}/${friendlyName}_NiceMasterPro.mp3`;
 
   console.log("⬇️ Downloading input file...");
   await downloadFile(inputUrl, inputPath);
@@ -104,6 +106,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
   const duration = await getAudioDuration(outputPath);
 
+  // 🔹 Upload vers Supabase Storage
   const fileData = fs.readFileSync(outputPath);
   const { error: uploadError } = await supabase.storage
     .from(SUPABASE_BUCKET)
@@ -125,7 +128,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   console.log(`✅ Upload réussi: ${publicUrl}`);
 
   return {
-    outputPath: publicUrl,
+    outputUrl: publicUrl,
     duration,
     sizeMB
   };

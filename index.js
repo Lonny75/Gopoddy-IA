@@ -1,7 +1,7 @@
 // index.js
 import express from "express";
 import cors from "cors";
-import { processAudio } from "./utils/processAudio.js"; // ✅ chemin correct
+import { processAudio } from "./utils/processAudio.js"; // ✅ on garde ton module
 
 const app = express();
 app.use(cors());
@@ -35,13 +35,14 @@ app.post("/api/process-audio", async (req, res) => {
   try {
     console.log(`🚀 Lancement mastering pour projet ${projectId}, user ${userId}`);
 
-    const result = await processAudio(inputUrl, projectId, userId, { type: "music" });
+    // 🔥 Appel de ton processAudio.js avec le preset unique "NiceMasterPro"
+    const result = await processAudio(inputUrl, projectId, userId, options);
 
     res.json({
       success: true,
       projectId,
       userId,
-      outputUrl: result.outputPath,
+      outputUrl: result.outputPath, // ⚡ Ton processAudio retourne { outputPath, duration, sizeMB }
       duration: result.duration,
       size: result.sizeMB,
       status: "completed"

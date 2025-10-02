@@ -16,6 +16,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// --- Téléchargement du fichier source ---
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
@@ -33,6 +34,7 @@ function downloadFile(url, dest) {
   });
 }
 
+// --- Récupération de la durée ---
 function getAudioDuration(filePath) {
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -42,6 +44,7 @@ function getAudioDuration(filePath) {
   });
 }
 
+// --- Nom "friendly" basé sur l'URL ---
 function getFriendlyName(inputUrl) {
   const fileName = path.basename(inputUrl, path.extname(inputUrl));
   const parts = fileName.split("-");
@@ -49,6 +52,7 @@ function getFriendlyName(inputUrl) {
   return base.replace(/_/g, " ").trim();
 }
 
+// --- Vérification/création du projet ---
 async function ensureProjectExists(projectId, userId) {
   const { data: project, error } = await supabase
     .from("projects")
@@ -67,6 +71,7 @@ async function ensureProjectExists(projectId, userId) {
   }
 }
 
+// --- Fonction principale ---
 export async function processAudio(inputUrl, projectId, userId, options = {}) {
   console.log(`🚀 Processing project ${projectId} for user ${userId}`);
 
@@ -75,7 +80,10 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   const inputPath = `/tmp/input_${projectId}.mp3`;
   const friendlyName = getFriendlyName(inputUrl);
   const outputPath = `/tmp/${projectId}_NiceMasterPro.mp3`;
-  const supabasePath = `music-master/${friendlyName}_NiceMasterPro.mp3`;
+
+  // --- Choix du sous-dossier de sortie ---
+  const folder = options.type === "podcast" ? "podcast-master" : "music-master";
+  const supabasePath = `${folder}/${friendlyName}_NiceMasterPro.mp3`;
 
   console.log("⬇️ Downloading input file...");
   await downloadFile(inputUrl, inputPath);
@@ -104,6 +112,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
   const duration = await getAudioDuration(outputPath);
 
+  // --- Upload vers Supabase ---
   const fileData = fs.readFileSync(outputPath);
   const { error: uploadError } = await supabase.storage
     .from(SUPABASE_BUCKET)
@@ -111,21 +120,30 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
   if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
 
-  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${supabasePath}`;
+  // --- Création d'une URL signée (7 jours) ---
+  const { data: signedUrlData, error: signedUrlError } = await supabase
+    .storage
+    .from(SUPABASE_BUCKET)
+    .createSignedUrl(supabasePath, 60 * 60 * 24 * 7);
+
+  if (signedUrlError) throw new Error(`Erreur création URL signée: ${signedUrlError.message}`);
+  const signedUrl = signedUrlData.signedUrl;
+
   const stats = fs.statSync(outputPath);
   const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
+  // --- Mise à jour projet ---
   await supabase.from("projects").update({
     processed_file_path: supabasePath,
-    processed_file_url: publicUrl,
+    processed_file_url: signedUrl,
     duration,
     status: "completed"
   }).eq("id", projectId);
 
-  console.log(`✅ Upload réussi: ${publicUrl}`);
+  console.log(`✅ Upload réussi: ${signedUrl}`);
 
   return {
-    outputPath: publicUrl,
+    outputPath: signedUrl,
     duration,
     sizeMB
   };

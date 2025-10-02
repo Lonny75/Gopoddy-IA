@@ -1,7 +1,7 @@
 // index.js
 import express from "express";
 import cors from "cors";
-import { processAudio } from "./utils/processAudio.js"; // ✅ chemin correct
+import { processAudio } from "./utils/processAudio.js";
 
 const app = express();
 app.use(cors());
@@ -33,14 +33,16 @@ app.post("/api/process-audio", async (req, res) => {
   }
 
   try {
-    console.log(`🚀 Lancement mastering pour projet ${projectId}, user ${userId}`);
+    const type = options.type === "podcast" ? "podcast" : "music";
+    console.log(`🚀 Lancement mastering (${type}) pour projet ${projectId}, user ${userId}`);
 
-    const result = await processAudio(inputUrl, projectId, userId, { type: "music" });
+    const result = await processAudio(inputUrl, projectId, userId, { type });
 
     res.json({
       success: true,
       projectId,
       userId,
+      type,
       outputUrl: result.outputPath,
       duration: result.duration,
       size: result.sizeMB,

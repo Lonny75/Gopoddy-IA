@@ -1,4 +1,5 @@
 // index.js
+console.log("✅ Bolt API démarrée et en écoute...");
 import express from "express";
 import cors from "cors";
 import { processAudio } from "./utils/processAudio.js";

@@ -10,6 +10,19 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
+// ✅ Middleware de log pour diagnostiquer les appels entrants
+app.use((req, res, next) => {
+  console.log("--------------------------------------------------");
+  console.log("📡 Requête entrante :", req.method, req.url);
+  console.log("🔹 Origine :", req.get("Origin") || "inconnue");
+  console.log("🔹 Heure :", new Date().toISOString());
+  if (req.method === "POST" || req.method === "PUT") {
+    console.log("🔹 Corps (tronqué) :", JSON.stringify(req.body).substring(0, 400));
+  }
+  console.log("--------------------------------------------------");
+  next();
+});
+
 // Logs pour debug variables d'environnement
 console.log("SUPABASE_URL:", process.env.SUPABASE_URL || "MISSING");
 console.log("SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "OK" : "MISSING");

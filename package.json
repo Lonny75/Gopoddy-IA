@@ -19,7 +19,7 @@
     "nodemon": "^3.1.0"
   },
   "engines": {
-    "node": ">=18 <=20""
+    "node": ">=18 <=20"
   },
   "keywords": [
     "ffmpeg",

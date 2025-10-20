@@ -85,66 +85,88 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   const folder = options.type === "podcast" ? "podcast-master" : "music-master";
   const supabasePath = `${folder}/${friendlyName}_NiceMasterPro.mp3`;
 
-  console.log("⬇️ Downloading input file...");
-  await downloadFile(inputUrl, inputPath);
+  try {
+    console.log("⬇️ Downloading input file...");
+    await downloadFile(inputUrl, inputPath);
 
-  console.log("🎛️ Applying Nice Master Pro preset...");
-  await new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .audioCodec("libmp3lame")
-      .audioFilters([
-        "loudnorm=I=-14:TP=-1.5:LRA=10",
-        "acompressor=threshold=-18dB:ratio=2.5:attack=20:release=200:makeup=4",
-        "highpass=f=35",
-        "equalizer=f=60:t=q:w=1.2:g=-1",
-        "equalizer=f=150:t=q:w=1.2:g=1.5",
-        "equalizer=f=400:t=q:w=1.2:g=-0.5",
-        "equalizer=f=2000:t=q:w=1.2:g=1",
-        "equalizer=f=8000:t=q:w=2:g=2",
-        "equalizer=f=12000:t=q:w=2:g=1",
-        "alimiter=limit=0.97",
-        "aformat=sample_fmts=s16:channel_layouts=stereo"
-      ])
-      .on("end", resolve)
-      .on("error", reject)
-      .save(outputPath);
-  });
+    console.log("🎛️ Applying Nice Master Pro preset...");
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .audioCodec("libmp3lame")
+        .audioFilters([
+          "loudnorm=I=-14:TP=-1.5:LRA=10",
+          "acompressor=threshold=-18dB:ratio=2.5:attack=20:release=200:makeup=4",
+          "highpass=f=35",
+          "equalizer=f=60:t=q:w=1.2:g=-1",
+          "equalizer=f=150:t=q:w=1.2:g=1.5",
+          "equalizer=f=400:t=q:w=1.2:g=-0.5",
+          "equalizer=f=2000:t=q:w=1.2:g=1",
+          "equalizer=f=8000:t=q:w=2:g=2",
+          "equalizer=f=12000:t=q:w=2:g=1",
+          "alimiter=limit=0.97",
+          "aformat=sample_fmts=s16:channel_layouts=stereo"
+        ])
+        .on("start", cmd => console.log("🚀 FFmpeg start:", cmd))
+        .on("progress", p => console.log(`📊 Progress: ${p.percent?.toFixed(1) || 0}%`))
+        .on("end", () => {
+          console.log("✅ FFmpeg terminé avec succès");
+          resolve();
+        })
+        .on("error", (err) => {
+          console.error("❌ FFmpeg a échoué :", err);
+          reject(err);
+        })
+        .save(outputPath);
 
-  const duration = await getAudioDuration(outputPath);
+      // Timeout sécurité
+      setTimeout(() => reject(new Error("⏱️ Timeout FFmpeg (2min)")), 120000);
+    });
 
-  // --- Upload vers Supabase ---
-  const fileData = fs.readFileSync(outputPath);
-  const { error: uploadError } = await supabase.storage
-    .from(SUPABASE_BUCKET)
-    .upload(supabasePath, fileData, { upsert: true });
+    const duration = await getAudioDuration(outputPath);
 
-  if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
+    console.log("⬆️ Upload vers Supabase...");
+    const fileData = fs.readFileSync(outputPath);
+    const { error: uploadError } = await supabase.storage
+      .from(SUPABASE_BUCKET)
+      .upload(supabasePath, fileData, { upsert: true });
 
-  // --- Création d'une URL signée (7 jours) ---
-  const { data: signedUrlData, error: signedUrlError } = await supabase
-    .storage
-    .from(SUPABASE_BUCKET)
-    .createSignedUrl(supabasePath, 60 * 60 * 24 * 7);
+    if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
 
-  if (signedUrlError) throw new Error(`Erreur création URL signée: ${signedUrlError.message}`);
-  const signedUrl = signedUrlData.signedUrl;
+    // --- Création d'une URL signée (7 jours) ---
+    const { data: signedUrlData, error: signedUrlError } = await supabase
+      .storage
+      .from(SUPABASE_BUCKET)
+      .createSignedUrl(supabasePath, 60 * 60 * 24 * 7);
 
-  const stats = fs.statSync(outputPath);
-  const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+    if (signedUrlError) throw new Error(`Erreur création URL signée: ${signedUrlError.message}`);
+    const signedUrl = signedUrlData.signedUrl;
 
-  // --- Mise à jour projet ---
-  await supabase.from("projects").update({
-    processed_file_path: supabasePath,
-    processed_file_url: signedUrl,
-    duration,
-    status: "completed"
-  }).eq("id", projectId);
+    const stats = fs.statSync(outputPath);
+    const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
-  console.log(`✅ Upload réussi: ${signedUrl}`);
+    console.log("📝 Mise à jour projet dans Supabase...");
+    await supabase.from("projects").update({
+      processed_file_path: supabasePath,
+      processed_file_url: signedUrl,
+      duration,
+      status: "completed"
+    }).eq("id", projectId);
 
-  return {
-    outputPath: signedUrl,
-    duration,
-    sizeMB
-  };
+    console.log(`✅ Upload réussi: ${signedUrl}`);
+
+    return {
+      outputPath: signedUrl,
+      duration,
+      sizeMB
+    };
+
+  } finally {
+    // --- Nettoyage des fichiers temporaires ---
+    try {
+      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    } catch (e) {
+      console.warn("⚠️ Impossible de supprimer les fichiers temporaires :", e.message);
+    }
+  }
 }

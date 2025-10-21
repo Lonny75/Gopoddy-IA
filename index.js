@@ -28,7 +28,7 @@ const PORT = process.env.PORT || 10000;
 app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"] }));
 app.use(express.json({ limit: "50mb" }));
 
-console.log("✅ Bolt API initialisée et en attente de connexions...");
+console.log("✅ Bolt Processing API initialisée et en attente de connexions...");
 
 // ----------------------------------------
 // 🧩 Middleware de log pour diagnostic
@@ -72,47 +72,23 @@ app.post("/api/process-audio", async (req, res) => {
     await supabase.from("projects").update({ status: "processing" }).eq("id", projectId);
     console.log("⚙️ Statut du projet mis à jour : processing");
 
-    // 🎚 Détermination du type
-    const type = options.type || "mastering";
-    console.log(`🎚 Type de traitement : ${type}`);
-
     // 🎛 Traitement audio
-    const result = await processAudio(inputUrl, projectId, userId, { type });
+    const { outputUrl, duration, sizeMB } = await processAudio(inputUrl, projectId, userId, options);
 
-    // ✅ Mise à jour des métadonnées dans Supabase
-    const { outputPath, duration, sizeMB } = result;
+    // ✅ Réponse finale (sans doublon de mise à jour Supabase)
+    console.log(`✅ Fichier traité avec succès : ${outputUrl}`);
 
-    const { error: updateError } = await supabase
-      .from("projects")
-      .update({
-        processed_file_path: outputPath,
-        duration,
-        size: sizeMB,
-        status: "completed",
-      })
-      .eq("id", projectId);
-
-    if (updateError) {
-      console.error("⚠️ Erreur Supabase lors de la mise à jour :", updateError);
-      throw new Error("Erreur de mise à jour des métadonnées dans Supabase.");
-    }
-
-    console.log("✅ Métadonnées du projet mises à jour avec succès !");
-    console.log(`📦 Fichier traité : ${outputPath}`);
-
-    // ✅ Réponse finale
     return res.json({
       success: true,
       projectId,
       userId,
-      type,
-      outputUrl: outputPath,
+      outputUrl,
       duration,
       size: sizeMB,
       status: "completed",
     });
   } catch (err) {
-    console.error("❌ Erreur lors du traitement audio :", err);
+    console.error("❌ Erreur lors du traitement audio :", err.message || err);
 
     // 🟥 Statut d’erreur dans Supabase
     await supabase.from("projects").update({ status: "failed" }).eq("id", projectId);

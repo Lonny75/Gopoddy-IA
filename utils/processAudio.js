@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import https from "https";
 import http from "http";
+import { v4 as uuidv4 } from "uuid";
 import { createClient } from "@supabase/supabase-js";
 
 // --- Configuration globale ---
@@ -47,10 +48,20 @@ function getAudioDuration(filePath) {
   });
 }
 
-// --- Nom de fichier "friendly" ---
-function getFriendlyName(inputUrl) {
-  const fileName = path.basename(inputUrl, path.extname(inputUrl));
-  return fileName.replace(/[_-]+/g, " ").trim();
+// --- Génère un nom de fichier propre et court ---
+function getSafeFileName(inputUrl) {
+  // On enlève tout après le "?" (tokens, query params)
+  const cleanUrl = inputUrl.split("?")[0];
+  const baseName = path.basename(cleanUrl, path.extname(cleanUrl));
+
+  // On garde uniquement caractères sûrs
+  const sanitized = baseName.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+  // UUID pour éviter les conflits
+  const shortId = uuidv4().split("-")[0];
+
+  // Nom final
+  return `${shortId}_${sanitized}_NiceMasterPro.mp3`;
 }
 
 // --- Vérifie ou crée un projet ---
@@ -79,12 +90,10 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
   await ensureProjectExists(projectId, userId);
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
-  const friendlyName = getFriendlyName(inputUrl);
-  const outputPath = `/tmp/${friendlyName}_NiceMasterPro.mp3`;
-
-  // Dossier par défaut pour tous les traitements actuels
+  const safeFileName = getSafeFileName(inputUrl);
+  const outputPath = `/tmp/${safeFileName}`;
   const folder = "mastered-files";
-  const supabasePath = `${folder}/${friendlyName}_NiceMasterPro.mp3`;
+  const supabasePath = `${folder}/${safeFileName}`;
 
   try {
     console.log("⬇️ Téléchargement du fichier source...");
@@ -156,6 +165,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
         processed_file_path: supabasePath,
         processed_file_url: signedUrl,
         duration,
+        size: sizeMB,
         status: "completed",
       })
       .eq("id", projectId);

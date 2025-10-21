@@ -80,10 +80,10 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
   const inputPath = `/tmp/input_${projectId}.mp3`;
   const friendlyName = getFriendlyName(inputUrl);
-  const outputPath = `/tmp/${projectId}_NiceMasterPro.mp3`;
+  const outputPath = `/tmp/${friendlyName}_NiceMasterPro.mp3`;
 
-  // Dossier de sortie logique
-  const folder = options.type === "podcast" ? "podcast-master" : "music-master";
+  // Dossier par défaut pour tous les traitements actuels
+  const folder = "mastered-files";
   const supabasePath = `${folder}/${friendlyName}_NiceMasterPro.mp3`;
 
   try {
@@ -91,6 +91,8 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
     await downloadFile(inputUrl, inputPath);
 
     console.log("🎛️ Traitement FFmpeg (preset Nice Master Pro)...");
+    const startTime = Date.now();
+
     await new Promise((resolve, reject) => {
       const command = ffmpeg(inputPath)
         .audioCodec("libmp3lame")
@@ -112,10 +114,7 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
           if (p.percent) console.log(`📊 Progression : ${p.percent.toFixed(1)}%`);
         })
         .on("end", resolve)
-        .on("error", (err) => {
-          console.error("❌ Erreur FFmpeg :", err.message);
-          reject(err);
-        })
+        .on("error", (err) => reject(err))
         .save(outputPath);
 
       // Timeout sécurité
@@ -132,17 +131,20 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
     const fileBuffer = fs.readFileSync(outputPath);
     const { error: uploadError } = await supabase.storage
       .from(SUPABASE_BUCKET)
-      .upload(supabasePath, fileBuffer, { upsert: true, contentType: "audio/mpeg" });
+      .upload(supabasePath, fileBuffer, {
+        upsert: true,
+        contentType: "audio/mpeg",
+      });
 
     if (uploadError) throw new Error(`Échec de l'upload : ${uploadError.message}`);
 
     console.log("🔗 Génération de l'URL signée...");
     const { data: signed, error: signedError } = await supabase.storage
       .from(SUPABASE_BUCKET)
-      .createSignedUrl(supabasePath, 60 * 60 * 24 * 7); // 7 jours
+      .createSignedUrl(supabasePath, 60 * 60 * 24 * 30); // 30 jours
 
     if (signedError) throw new Error(`Erreur URL signée : ${signedError.message}`);
-    const signedUrl = signed.signedUrl;
+    const signedUrl = signed?.signedUrl || null;
 
     const stats = fs.statSync(outputPath);
     const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
@@ -160,24 +162,18 @@ export async function processAudio(inputUrl, projectId, userId, options = {}) {
 
     if (updateError) throw updateError;
 
-    console.log(`✅ Traitement terminé avec succès (${sizeMB} MB / ${duration.toFixed(1)}s)`);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`✅ Traitement terminé (${sizeMB} MB / ${elapsed}s)`);
 
-    return {
-      outputUrl: signedUrl,
-      duration,
-      sizeMB,
-    };
+    return { outputUrl: signedUrl, duration, sizeMB };
   } catch (err) {
     console.error("❌ Erreur globale :", err.message);
-
     await supabase
       .from("projects")
       .update({ status: "failed", error_message: err.message })
       .eq("id", projectId);
-
     throw err;
   } finally {
-    // Nettoyage
     try {
       if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
       if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
